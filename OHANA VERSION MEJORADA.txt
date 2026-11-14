@@ -1,0 +1,226 @@
+function doPost(e) {
+  try {
+    if (!e || !e.postData || !e.postData.contents) {
+      return jsonResp({ status: 'error', mensaje: 'Petición vacía' });
+    }
+
+    const data = JSON.parse(e.postData.contents);
+    const accion = data.accion;
+    const ss = SpreadsheetApp.getActiveSpreadsheet();
+
+    // Función auxiliar para obtener o crear la pestaña con encabezados
+    function getHojaSegura(nombre, encabezados) {
+      let hoja = ss.getSheetByName(nombre);
+      if (!hoja) {
+        hoja = ss.insertSheet(nombre);
+        hoja.appendRow(encabezados);
+        SpreadsheetApp.flush();
+      }
+      return hoja;
+    }
+
+    // 1. GUARDAR O EDITAR PACIENTE (USANDO DOCUMENTO COMO ID)
+    if (accion === 'guardarPaciente') {
+      const p = data.paciente;
+      const hoja = getHojaSegura('Pacientes', ['ID', 'Nombre', 'Documento', 'Celular', 'Nacimiento', 'Correo', 'FechaRegistro']);
+
+      const idPaciente = String(p.id || p.doc || '').trim();
+      const datosFila = [
+        idPaciente,
+        String(p.name || ''),
+        String(p.doc || ''),
+        String(p.phone || ''),
+        String(p.birth || ''),
+        String(p.email || ''),
+        new Date().toLocaleString('es-CO')
+      ];
+
+      // Busca si el documento/ID ya existe para actualizar la fila
+      const valores = hoja.getDataRange().getValues();
+      let filaExistente = -1;
+      for (let i = 1; i < valores.length; i++) {
+        if (String(valores[i][0]).trim() === idPaciente || String(valores[i][2]).trim() === idPaciente) {
+          filaExistente = i + 1;
+          break;
+        }
+      }
+
+      if (filaExistente > 0) {
+        hoja.getRange(filaExistente, 1, 1, datosFila.length).setValues([datosFila]);
+      } else {
+        hoja.appendRow(datosFila);
+      }
+
+      SpreadsheetApp.flush();
+      return jsonResp({ status: 'ok', id: idPaciente });
+    }
+
+    // 2. GUARDAR O EDITAR ANAMNESIS
+    if (accion === 'guardarAnamnesis') {
+      const a = data.anamnesis;
+      const hoja = getHojaSegura('Anamnesis', ['ID', 'PacienteID', 'Fecha', 'Motivo', 'Antecedentes', 'DetalleAlergias', 'Medicamentos', 'Cirugias', 'ProcPrevios', 'Rutina', 'Observaciones', 'FirmaURL']);
+
+      let firmaUrl = a.sigUrl || '';
+      if (a.sig && a.sig.length > 50 && a.sig.startsWith('data:image')) {
+        firmaUrl = guardarArchivoBase64(`Firma_Anam_${a.pid}_${Date.now()}.jpg`, a.sig, 'image/jpeg');
+      }
+
+      const datosFila = [
+        String(a.id),
+        String(a.pid),
+        String(a.date || new Date().toLocaleString('es-CO')),
+        String(a.f ? a.f.motivo || '' : ''),
+        String((a.c || []).join(', ')),
+        String(a.f ? a.f.alerg || '' : ''),
+        String(a.f ? a.f.meds || '' : ''),
+        String(a.f ? a.f.cir || '' : ''),
+        String(a.f ? a.f.prev || '' : ''),
+        String(a.f ? a.f.skin || '' : ''),
+        String(a.f ? a.f.obs || '' : ''),
+        firmaUrl
+      ];
+
+      const valores = hoja.getDataRange().getValues();
+      let filaExistente = -1;
+      for (let i = 1; i < valores.length; i++) {
+        if (String(valores[i][0]) === String(a.id)) {
+          filaExistente = i + 1;
+          break;
+        }
+      }
+
+      if (filaExistente > 0) {
+        hoja.getRange(filaExistente, 1, 1, datosFila.length).setValues([datosFila]);
+      } else {
+        hoja.appendRow(datosFila);
+      }
+
+      SpreadsheetApp.flush();
+      return jsonResp({ status: 'ok', id: a.id, firmaUrl: urlImagenDrive(firmaUrl) });
+    }
+
+    // 3. GUARDAR CONSENTIMIENTO
+    if (accion === 'guardarConsentimiento') {
+      const c = data.consentimiento;
+      const hoja = getHojaSegura('Consentimientos', ['ID', 'PacienteID', 'Procedimiento', 'Fecha', 'Texto', 'FirmaURL']);
+
+      let firmaUrl = 'Firma capturada';
+      if (c.sig && c.sig.length > 50 && c.sig.startsWith('data:image')) {
+        firmaUrl = guardarArchivoBase64(`Firma_Cons_${c.pid}_${Date.now()}.jpg`, c.sig, 'image/jpeg');
+      }
+
+      hoja.appendRow([
+        String(c.id),
+        String(c.pid),
+        String(c.proc || ''),
+        String(c.date || new Date().toLocaleString('es-CO')),
+        String(c.text || ''),
+        firmaUrl
+      ]);
+      SpreadsheetApp.flush();
+      return jsonResp({ status: 'ok', id: c.id });
+    }
+
+    // 4. GUARDAR FOTOS
+    if (accion === 'guardarFotos') {
+      const f = data.fotos;
+      const hoja = getHojaSegura('Fotos', ['ID', 'PacienteID', 'Nota', 'Fecha', 'UrlAntes', 'UrlDespues']);
+
+      let urlB = '', urlA = '';
+      if (f.b && f.b.length > 50 && f.b.startsWith('data:image')) {
+        urlB = guardarArchivoBase64(`Foto_Antes_${f.pid}_${Date.now()}.jpg`, f.b, 'image/jpeg');
+      }
+      if (f.a && f.a.length > 50 && f.a.startsWith('data:image')) {
+        urlA = guardarArchivoBase64(`Foto_Despues_${f.pid}_${Date.now()}.jpg`, f.a, 'image/jpeg');
+      }
+
+      hoja.appendRow([
+        String(f.id),
+        String(f.pid),
+        String(f.note || ''),
+        String(f.date || new Date().toLocaleString('es-CO')),
+        urlB,
+        urlA
+      ]);
+      SpreadsheetApp.flush();
+      // Se devuelven miniaturas para que la app pueda mostrarlas de inmediato
+      return jsonResp({ status: 'ok', id: f.id, b: urlImagenDrive(urlB), a: urlImagenDrive(urlA) });
+    }
+
+    // 5. GUARDAR PDF EN DRIVE PARA COMPARTIR POR WHATSAPP
+    if (accion === 'guardarPdfParaCompartir') {
+      const nombreArchivo = data.nombre || `Documento_Ohana_${Date.now()}.pdf`;
+      const base64Pdf = data.pdfBase64;
+      const urlPdf = guardarArchivoBase64(nombreArchivo, base64Pdf, 'application/pdf');
+      return jsonResp({ status: 'ok', pdfUrl: urlPdf });
+    }
+
+    // 6. CARGAR DATOS
+    if (accion === 'obtenerTodo') {
+      const hojaPacientes = ss.getSheetByName('Pacientes');
+      const pacientes = hojaPacientes ? hojaPacientes.getDataRange().getValues().slice(1).map(r => ({
+        id: String(r[0]), name: r[1], doc: String(r[2]), phone: r[3], birth: r[4], email: r[5]
+      })) : [];
+
+      const hojaRecords = ss.getSheetByName('Anamnesis');
+      const anamnesis = hojaRecords ? hojaRecords.getDataRange().getValues().slice(1).map(r => ({
+        id: String(r[0]), pid: String(r[1]), date: r[2], k: 'a',
+        f: { motivo: r[3], alerg: r[5], meds: r[6], cir: r[7], prev: r[8], skin: r[9], obs: r[10] },
+        c: r[4] ? String(r[4]).split(',').map(Number) : [],
+        sig: urlImagenDrive(r[11])
+      })) : [];
+
+      const hojaCons = ss.getSheetByName('Consentimientos');
+      const consentimientos = hojaCons ? hojaCons.getDataRange().getValues().slice(1).map(r => ({
+        id: String(r[0]), pid: String(r[1]), proc: r[2], date: r[3], k: 'c', text: r[4], sig: urlImagenDrive(r[5])
+      })) : [];
+
+      const hojaFotos = ss.getSheetByName('Fotos');
+      const fotos = hojaFotos ? hojaFotos.getDataRange().getValues().slice(1).map(r => ({
+        id: String(r[0]), pid: String(r[1]), note: r[2], date: r[3],
+        b: urlImagenDrive(r[4]), a: urlImagenDrive(r[5])
+      })) : [];
+
+      return jsonResp({
+        status: 'ok',
+        patients: pacientes,
+        records: [...anamnesis, ...consentimientos],
+        photos: fotos
+      });
+    }
+
+    return jsonResp({ status: 'error', mensaje: 'Acción desconocida: ' + accion });
+  } catch (err) {
+    return jsonResp({ status: 'error', mensaje: err.toString() });
+  }
+}
+
+function guardarArchivoBase64(nombre, base64Data, mimeType) {
+  try {
+    const ss = SpreadsheetApp.getActiveSpreadsheet();
+    const archivoSpreadsheet = DriveApp.getFileById(ss.getId());
+    const carpetas = archivoSpreadsheet.getParents();
+    const carpeta = carpetas.hasNext() ? carpetas.next() : DriveApp.getRootFolder();
+
+    const dataLimpia = base64Data.replace(/^data:(image\/[a-z]+|application\/pdf);base64,/, "");
+    const decoded = Utilities.base64Decode(dataLimpia);
+    const blob = Utilities.newBlob(decoded, mimeType, nombre);
+    const archivo = carpeta.createFile(blob);
+    archivo.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
+    return archivo.getUrl();
+  } catch (err) {
+    return "Error archivo: " + err.toString();
+  }
+}
+
+// Convierte un enlace de Drive (/file/d/ID/view) en una miniatura que sí funciona en <img>.
+// Si el valor no es un enlace de Drive (por ejemplo "Firma capturada"), lo deja igual.
+function urlImagenDrive(link) {
+  const s = String(link || '');
+  const m = s.match(/\/d\/([a-zA-Z0-9_-]+)/) || s.match(/[?&]id=([a-zA-Z0-9_-]+)/);
+  return m ? 'https://drive.google.com/thumbnail?id=' + m[1] + '&sz=w1200' : s;
+}
+
+function jsonResp(objeto) {
+  return ContentService.createTextOutput(JSON.stringify(objeto)).setMimeType(ContentService.MimeType.JSON);
+}
